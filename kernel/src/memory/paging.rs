@@ -32,8 +32,6 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use crate::cap::{Capability, ResourceHandle, UnregisteredResourceHandle};
-
 /// The kernel's physical frame allocator. It returns frame numbers, not physical addresses.
 static PHYS_MEM_ALLOC: Mutex<Option<phys::BuddyAllocator>> = Mutex::new(None);
 
@@ -169,16 +167,16 @@ mod phys {
             } else if start > RESERVED {
                 // beyond reserved region
                 pmem_alloc.as_mut().unwrap().extend(start, end);
-                printk!("\tadded frames {:#X} - {:#X}\n", start, end);
+                // printk!("\tadded frames {:#X} - {:#X}\n", start, end);
             } else if start <= RESERVED {
                 // chop off the reserved part
                 pmem_alloc.as_mut().unwrap().extend(RESERVED, end);
-                printk!("\tadded frames {:#X} - {:#X}\n", RESERVED, end);
+                // printk!("\tadded frames {:#X} - {:#X}\n", RESERVED, end);
             }
             total_mem += end - start + 1;
         }
 
-        printk!("\tphysical memory inited - {} frames\n", total_mem);
+        // printk!("\tphysical memory inited - {} frames\n", total_mem);
     }
 }
 
@@ -235,7 +233,7 @@ fn init_early_paging(boot_info: &'static BootInfo) {
         }
     }
 
-    printk!("\tearly page tables inited\n");
+    // printk!("\tearly page tables inited\n");
 }
 
 /// Do late paging initialization. At this point we have a working physical memory allocator and
@@ -250,14 +248,14 @@ pub fn init(boot_info: &'static BootInfo) {
     *vmem_alloc = Some(BuddyAllocator::new(ADDRESS_SPACE_WIDTH));
 
     for (start, end) in VIRT_ADDR_AVAILABLE {
-        printk!("\tadd virt addrs [{:16X}, {:16X}]\n", start, end);
+        // printk!("\tadd virt addrs [{:16X}, {:16X}]\n", start, end);
         vmem_alloc.as_mut().unwrap().extend(*start, *end);
     }
 
     let mut allowed = ALLOWED.lock();
     *allowed = Some(BTreeMap::new());
 
-    printk!("\tvirtual address allocator inited\n");
+    // printk!("\tvirtual address allocator inited\n");
 
     ///////////////////////////////////////////////////////////////////////////
     // Initially all page table entries are black listed for userspace, but we want to disable at
@@ -306,7 +304,7 @@ pub fn init(boot_info: &'static BootInfo) {
 }
 
 /// Capability on a memory region.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VirtualMemoryRegion {
     /// The first virtual address of the memory region (bytes).
     addr: u64,
@@ -327,7 +325,7 @@ impl VirtualMemoryRegion {
     /// # Panics
     ///
     /// If we exhaust the virtual address space.
-    pub fn alloc(npages: usize) -> UnregisteredResourceHandle {
+    pub fn alloc(npages: usize) -> VirtualMemoryRegion {
         let mem = VIRT_MEM_ALLOC
             .lock()
             .as_mut()
@@ -335,20 +333,16 @@ impl VirtualMemoryRegion {
             .alloc(npages)
             .expect("Out of virtual memory.");
 
-        UnregisteredResourceHandle::new(Capability::VirtualMemoryRegion(VirtualMemoryRegion {
+        VirtualMemoryRegion {
             addr: mem as u64 * Size4KiB::SIZE,
             len: npages as u64 * Size4KiB::SIZE,
-        }))
+        }
     }
 
     /// Like `alloc`, but adds 2 to npages and calls `guard`.
-    pub fn alloc_with_guard(npages: usize) -> UnregisteredResourceHandle {
+    pub fn alloc_with_guard(npages: usize) -> VirtualMemoryRegion {
         let mut mem = Self::alloc(npages + 2);
-        if let Capability::VirtualMemoryRegion(mem) = mem.as_mut_ref() {
-            mem.guard();
-        } else {
-            unreachable!();
-        }
+        mem.guard();
         mem
     }
 
@@ -374,13 +368,8 @@ impl VirtualMemoryRegion {
 
 /// Mark the `region` as usable with the given `flags`. This does not allocate any physical memory.
 /// Pages will be allocated by demand paging.
-pub fn map_region(region: ResourceHandle, flags: PageTableFlags) {
-    let (start, len) = {
-        region.with(|cap| {
-            let region = cap_unwrap!(VirtualMemoryRegion(cap));
-            (region.start(), region.len())
-        })
-    };
+pub fn map_region(region: VirtualMemoryRegion, flags: PageTableFlags) {
+    let (start, len) = (region.start(), region.len());
     ALLOWED
         .lock()
         .as_mut()

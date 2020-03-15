@@ -14,7 +14,7 @@ fn rust_begin_panic(pi: &PanicInfo) -> ! {
     // we should no be interrupting any more
     interrupts::disable();
 
-    printk!("\n========{{ PANIC }}========\n");
+    printk!("\n========={{ PANIC }}=========\n");
 
     // Print location if its there
     if let Some(loc) = pi.location() {

@@ -25,7 +25,7 @@ pub fn init() {
         panic!("PIT init divide={} doesn't fit in 16 bits", divide);
     }
 
-    printk!("pit inited - {} hz\n", HZ);
+    // printk!("pit inited - {} hz\n", HZ);
 
     unsafe {
         // save flags

@@ -140,7 +140,7 @@ fn pic_irq(irq: usize, _: &mut InterruptStackFrame) {
 
         // Keyboard interrupts
         1 => {
-            unsafe { crate::io::kbd::handler() };
+            
         }
 
         // Processor and FPU interrupts

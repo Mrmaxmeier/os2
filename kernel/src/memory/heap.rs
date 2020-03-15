@@ -60,12 +60,14 @@ pub fn init(allocator: &mut KernelAllocator, start: usize, size: usize) {
 
     let free_size = allocator.size();
 
+    /*
     printk!(
         "\theap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
         start,
         start + size,
         free_size,
     );
+    */
 }
 
 #[alloc_error_handler]
@@ -105,11 +107,13 @@ pub mod early {
 
         allocator.set_heap(heap);
 
+        /*
         printk!(
             "\tearly heap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
             init_heap_start as usize,
             init_heap_start as usize + INITIAL_KHEAP_SPACE_SIZE,
             free_size,
         );
+        */
     }
 }

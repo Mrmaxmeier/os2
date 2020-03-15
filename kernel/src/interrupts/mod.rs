@@ -74,7 +74,7 @@ pub fn init() {
         };
         let stack_start = VirtAddr::from_ptr(&stack);
         let stack_end = stack_start + IST_FRAME_SIZE;
-        printk!("double fault stack @ {:?}, {:?}\n", stack_start, stack_end);
+        // printk!("double fault stack @ {:?}, {:?}\n", stack_start, stack_end);
         stack_end
     };
 
@@ -90,7 +90,7 @@ pub fn init() {
         };
         let stack_start = VirtAddr::from_ptr(&stack);
         let stack_end = stack_start + IST_FRAME_SIZE;
-        printk!("irq stack @ {:?}, {:?}\n", stack_start, stack_end);
+        // printk!("irq stack @ {:?}, {:?}\n", stack_start, stack_end);
         stack_end
     };
 

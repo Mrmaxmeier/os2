@@ -37,6 +37,11 @@ impl SysTime {
     pub fn after(self, secs: usize) -> Self {
         SysTime(self.0 + secs * PIT_HZ)
     }
+
+    /// Get the time `secs` seconds after `self`.
+    pub fn after_ms(self, millis: usize) -> Self {
+        SysTime(self.0 + millis * PIT_HZ / 1000)
+    }
 }
 
 /// Tick the clock atomically.

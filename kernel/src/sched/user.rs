@@ -9,7 +9,6 @@ use x86_64::{
 };
 
 use crate::{
-    cap::ResourceHandle,
     interrupts::SELECTORS,
     memory::{map_region, VirtualMemoryRegion},
 };
@@ -57,20 +56,20 @@ struct SavedRegs {
 ///
 /// Returns the virtual address region where the code has been loaded and the first RIP to start
 /// executing.
-pub fn load_user_code_section() -> (ResourceHandle, usize) {
+pub fn load_user_code_section() -> (VirtualMemoryRegion, usize) {
     // TODO: Allocate enough space for the code we will load
-    let user_code_section = VirtualMemoryRegion::alloc_with_guard(1).register();
+    let user_code_section = VirtualMemoryRegion::alloc_with_guard(1);
 
     // Map the code section.
     map_region(
-        user_code_section,
+        user_code_section.clone(),
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
     );
 
     // TODO: load the code
 
     // TODO: this is test code that is an infinite loop followed by nops
-    let start_addr = user_code_section.with(|cap| {
+    let start_addr = {
         const TEST_CODE: &[u8] = &[
             // here:
             0x54, // push %rsp
@@ -88,13 +87,13 @@ pub fn load_user_code_section() -> (ResourceHandle, usize) {
         ];
 
         unsafe {
-            let start = cap_unwrap!(VirtualMemoryRegion(cap)).start();
+            let start = user_code_section.start();
             for (i, b) in TEST_CODE.iter().enumerate() {
                 start.offset(i as isize).write(*b);
             }
             start as usize
         }
-    });
+    };
 
     (user_code_section, start_addr)
 }
@@ -105,13 +104,13 @@ pub fn load_user_code_section() -> (ResourceHandle, usize) {
 /// Returns the virtual address region of the stack. The first and last pages are left unmapped as
 /// guard pages. The stack should be used from the end (high-addresses) of the region (top of
 /// stack), since it grows downward.
-pub fn allocate_user_stack() -> ResourceHandle {
+pub fn allocate_user_stack() -> VirtualMemoryRegion {
     // Allocate the stack the user will run on.
-    let user_stack = VirtualMemoryRegion::alloc_with_guard(USER_STACK_SIZE).register();
+    let user_stack = VirtualMemoryRegion::alloc_with_guard(USER_STACK_SIZE);
 
     // Map the stack into the address space.
     map_region(
-        user_stack,
+        user_stack.clone(),
         PageTableFlags::PRESENT
             | PageTableFlags::WRITABLE
             | PageTableFlags::USER_ACCESSIBLE
@@ -150,16 +149,13 @@ pub fn init() {
     }
 }
 
-pub fn start_user_task(code: (ResourceHandle, usize), stack: ResourceHandle) -> ! {
+pub fn start_user_task(rip: usize, stack: VirtualMemoryRegion) -> ! {
     // Compute new register values
-    let rsp = stack.with(|cap| {
-        let region = cap_unwrap!(VirtualMemoryRegion(cap));
-        let start = region.start();
-        let len = region.len();
+    let rsp = {
+        let start = stack.start();
+        let len = stack.len();
         unsafe { start.offset(len as isize) }
-    });
-
-    let (_handle, rip) = code;
+    };
 
     // Enable interrupts for user mode.
     let rflags = (rflags::read() | rflags::RFlags::INTERRUPT_FLAG).bits();
@@ -267,6 +263,10 @@ mod syscall {
         unsafe {
             asm!(
                 "
+                # save kernel stack
+                mov $16, %rcx
+                mov %rsp, (%rcx)
+
                 # restore registers
                 movq $0, %rax
                 movq $1, %rbx
@@ -315,6 +315,7 @@ mod syscall {
                 , "m"(registers.rflags)
                 , "m"(registers.rip)
                 , "m"(registers.rsp)
+                , "i"(&super::super::CURRENT_STACK_HEAD)
                 : "memory", "rax", "rbx", "rcx", "rdx", "rdi", "rsi", "r8", "r9", "r10", "r11", "r12",
                   "r13", "r14", "r15", "rbp"
                 : "volatile"
