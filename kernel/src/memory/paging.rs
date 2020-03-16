@@ -91,6 +91,7 @@ mod phys {
     };
 
     use super::{KERNEL_HEAP_SIZE, KERNEL_HEAP_START, PHYS_MEM_ALLOC};
+    use crate::PAGING_DEBUG;
 
     /// A thin wrapper around `BuddyAllocator` that just implements `FrameAllocator`.
     pub struct BuddyAllocator(buddy::BuddyAllocator<usize>);
@@ -167,16 +168,22 @@ mod phys {
             } else if start > RESERVED {
                 // beyond reserved region
                 pmem_alloc.as_mut().unwrap().extend(start, end);
-                // printk!("\tadded frames {:#X} - {:#X}\n", start, end);
+                if PAGING_DEBUG {
+                    printk!("\tadded frames {:#X} - {:#X}\n", start, end)
+                };
             } else if start <= RESERVED {
                 // chop off the reserved part
                 pmem_alloc.as_mut().unwrap().extend(RESERVED, end);
-                // printk!("\tadded frames {:#X} - {:#X}\n", RESERVED, end);
+                if PAGING_DEBUG {
+                    printk!("\tadded frames {:#X} - {:#X}\n", RESERVED, end)
+                };
             }
             total_mem += end - start + 1;
         }
 
-        // printk!("\tphysical memory inited - {} frames\n", total_mem);
+        if PAGING_DEBUG {
+            printk!("\tphysical memory inited - {} frames\n", total_mem)
+        };
     }
 }
 
@@ -248,7 +255,9 @@ pub fn init(boot_info: &'static BootInfo) {
     *vmem_alloc = Some(BuddyAllocator::new(ADDRESS_SPACE_WIDTH));
 
     for (start, end) in VIRT_ADDR_AVAILABLE {
-        // printk!("\tadd virt addrs [{:16X}, {:16X}]\n", start, end);
+        if crate::PAGING_DEBUG {
+            printk!("\tadd virt addrs [{:16X}, {:16X}]\n", start, end);
+        }
         vmem_alloc.as_mut().unwrap().extend(*start, *end);
     }
 
@@ -363,6 +372,19 @@ impl VirtualMemoryRegion {
     pub fn guard(&mut self) {
         self.addr += Size4KiB::SIZE;
         self.len -= Size4KiB::SIZE * 2;
+    }
+
+    /// Permanently remove range from underlying allocator. start..=end
+    pub unsafe fn take_range(start: u64, end: u64) -> Self {
+        VIRT_MEM_ALLOC
+            .lock()
+            .as_mut()
+            .unwrap()
+            .remove_range(start as _, end as _);
+        VirtualMemoryRegion {
+            addr: start,
+            len: (end + 1) - start,
+        }
     }
 }
 

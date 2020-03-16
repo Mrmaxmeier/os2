@@ -30,6 +30,8 @@ use memory::{map_region, VirtualMemoryRegion};
 
 use x86_64::structures::paging::PageTableFlags;
 
+pub const PAGING_DEBUG: bool = true;
+
 /// The kernel heap
 #[global_allocator]
 static mut ALLOCATOR: memory::KernelAllocator = memory::KernelAllocator::new();
@@ -52,7 +54,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Initialize memory
     // make the kernel heap 1MiB - 4KiB starting at 1MiB + 4KiB. This extra page will be unmapped
     // later to protect against heap overflows (unlikely as that is)...
-    printk!("[    ] Memory ...\r");
+    if PAGING_DEBUG {
+        printk!("[ .. ] Memory\n");
+    } else {
+        printk!("[    ] Memory ...\r");
+    }
     memory::init(unsafe { &mut ALLOCATOR }, boot_info);
     printk!("[DONE] Memory    \n");
 
@@ -75,17 +81,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     printk!("[DONE] Time    \n");
 
-    // TODO: move to memory::paging, remove access to VirtualMemoryRegion::{addr,len}
-    crate::memory::paging::VIRT_MEM_ALLOC
-        .lock()
-        .as_mut()
-        .unwrap()
-        .remove_range(0x13370000, 0x13370fff);
-    let code = VirtualMemoryRegion {
-        addr: 0x13370000,
-        len: 0x1000,
-    };
-    printk!("code vaddr: {:?}\n", code);
+    let code = unsafe { VirtualMemoryRegion::take_range(0x13370000, 0x13370fff) };
     {
         map_region(
             code.clone(),
