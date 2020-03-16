@@ -28,7 +28,7 @@ const FMASK: Msr = Msr::new(0xC000_0084);
 
 #[derive(Debug, Default)]
 #[repr(C)]
-struct SavedRegs {
+pub struct SavedRegs {
     pub rax: u64,
     pub rbx: u64,
     pub rcx: u64,

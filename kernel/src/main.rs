@@ -22,8 +22,8 @@ mod bare_bones;
 mod interrupts;
 mod memory;
 mod sched;
+mod snapshot;
 mod time;
-
 
 use bootloader::BootInfo;
 use memory::{map_region, VirtualMemoryRegion};
@@ -39,7 +39,6 @@ bootloader::entry_point!(kernel_main);
 /// This is the entry point to the kernel. It is the first rust code that runs.
 #[no_mangle]
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
-
     // At this point we are still in the provisional environment with
     // - the temporary page tables (first 2MiB of memory direct mapped)
     // - no IDT
@@ -69,22 +68,35 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     printk!("[    ] Time ...\r");
     let start = time::SysTime::now();
     for target in 0..50 {
-        while time::SysTime::now() < start.after_ms(target*20) {
+        while time::SysTime::now() < start.after_ms(target * 20) {
             x86_64::instructions::hlt();
         }
-        printk!("[{:04}] Time ...\r", (target+1)*20);
+        printk!("[{:04}] Time ...\r", (target + 1) * 20);
     }
-    printk!("[DONE] Time    \r");
-    let code =  VirtualMemoryRegion::alloc_with_guard(6);
+    printk!("[DONE] Time    \n");
+
+    // TODO: move to memory::paging, remove access to VirtualMemoryRegion::{addr,len}
+    crate::memory::paging::VIRT_MEM_ALLOC
+        .lock()
+        .as_mut()
+        .unwrap()
+        .remove_range(0x13370000, 0x13370fff);
+    let code = VirtualMemoryRegion {
+        addr: 0x13370000,
+        len: 0x1000,
+    };
+    printk!("code vaddr: {:?}\n", code);
     {
-        map_region(code.clone(), PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE);
+        map_region(
+            code.clone(),
+            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE,
+        );
         let data = [0x90, 0x90, 0x0f, 0x05, 0xcc];
         for i in 0..data.len() {
             unsafe { code.start().add(i).write_volatile(data[i]) };
         }
     }
-    let stack =  VirtualMemoryRegion::alloc_with_guard(1022);
-    map_region(stack.clone(), PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE);
+    let stack = sched::user::allocate_user_stack();
     printk!("[    ] Userspace ...\r");
     sched::user::start_user_task(code.start() as usize, stack);
     // printk!("[DONE] Userspace    \n");

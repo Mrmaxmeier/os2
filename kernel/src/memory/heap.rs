@@ -71,6 +71,7 @@ pub fn init(allocator: &mut KernelAllocator, start: usize, size: usize) {
 }
 
 #[alloc_error_handler]
+#[cfg(not(test))] // rust-analyzer is confused by a 'duplicate definition' in std via test
 fn oom(_: Layout) -> ! {
     panic!("OOM!");
 }

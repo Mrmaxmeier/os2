@@ -438,7 +438,7 @@ pub extern "x86-interrupt" fn handle_page_fault(
         // Segfault
         _ => {
             panic!(
-                "Segfault at ip {:x}, addr {:x}",
+                "Segfault at ip {:#x}, addr {:#x}",
                 esf.instruction_pointer.as_u64(),
                 cr2,
             );
