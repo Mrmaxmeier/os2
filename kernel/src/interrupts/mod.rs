@@ -72,9 +72,10 @@ pub fn init() {
         let stack = box Stack {
             _data: [0; IST_FRAME_SIZE],
         };
-        let stack_start = VirtAddr::from_ptr(&stack);
+        let stack_start = VirtAddr::from_ptr(stack.as_ref());
         let stack_end = stack_start + IST_FRAME_SIZE;
-        // printk!("double fault stack @ {:?}, {:?}\n", stack_start, stack_end);
+        alloc::boxed::Box::leak(stack);
+        printk!("double fault stack @ {:?}, {:?}\n", stack_start, stack_end);
         stack_end
     };
 
@@ -88,9 +89,10 @@ pub fn init() {
         let stack = box Stack {
             _data: [0; IST_FRAME_SIZE],
         };
-        let stack_start = VirtAddr::from_ptr(&stack);
+        let stack_start = VirtAddr::from_ptr(stack.as_ref());
+        alloc::boxed::Box::leak(stack);
         let stack_end = stack_start + IST_FRAME_SIZE;
-        // printk!("irq stack @ {:?}, {:?}\n", stack_start, stack_end);
+        printk!("irq stack @ {:?}, {:?}\n", stack_start, stack_end);
         stack_end
     };
 
