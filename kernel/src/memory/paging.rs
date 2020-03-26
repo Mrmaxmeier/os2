@@ -112,6 +112,10 @@ mod phys {
         pub fn free(&mut self, val: usize, n: usize) {
             self.0.free(val, n)
         }
+
+        pub fn remove_range(&mut self, start: usize, end: usize) {
+            self.0.remove_range(start, end)
+        }
     }
 
     unsafe impl FrameAllocator<Size4KiB> for BuddyAllocator {
@@ -324,7 +328,7 @@ pub struct VirtualMemoryRegion {
 
 impl VirtualMemoryRegion {
     /// Allocate a region of virtual memory (but not backed by physical memory). Specifically, allocate
-    /// the given number of pages. These allocations are basically parmanent.
+    /// the given number of pages. These allocations are basically permanent.
     ///
     /// No page table mappings are created. It is the user's responsibility to make sure the memory is
     /// mapped before it is used.
@@ -335,8 +339,7 @@ impl VirtualMemoryRegion {
     ///
     /// If we exhaust the virtual address space.
     pub fn alloc(npages: usize) -> VirtualMemoryRegion {
-        let mem = VIRT_MEM_ALLOC
-            .lock()
+        let mem = VIRT_MEM_ALLOC.lock()
             .as_mut()
             .unwrap()
             .alloc(npages)
@@ -376,11 +379,15 @@ impl VirtualMemoryRegion {
 
     /// Permanently remove range from underlying allocator. start..=end
     pub unsafe fn take_range(start: u64, end: u64) -> Self {
+        assert!(start % Size4KiB::SIZE == 0);
+        assert!((end+1) % Size4KiB::SIZE == 0);
+        let start_page = start / Size4KiB::SIZE;
+        let end_page = (end+1) / Size4KiB::SIZE;
         VIRT_MEM_ALLOC
             .lock()
             .as_mut()
             .unwrap()
-            .remove_range(start as _, end as _);
+            .remove_range(start_page as _, end_page as _);
         VirtualMemoryRegion {
             addr: start,
             len: (end + 1) - start,
@@ -466,4 +473,83 @@ pub extern "x86-interrupt" fn handle_page_fault(
             );
         }
     }
+}
+
+pub fn allocate_and_map_contiguous_phys_region(
+    size: u64,
+) -> (x86_64::PhysAddr, VirtualMemoryRegion) {
+    let size = (size + 0xfff) & (!0xfff);
+    assert!(size % Size4KiB::SIZE == 0);
+    let npages = (size / Size4KiB::SIZE) as usize;
+
+    let phys = PHYS_MEM_ALLOC
+        .lock()
+        .as_mut()
+        .unwrap()
+        .alloc(npages)
+        .expect("failed to allocate dma region");
+    let phys_addr = x86_64::PhysAddr::new((phys as u64) << 12);
+
+    let region = VirtualMemoryRegion::alloc(npages);
+    let flags =
+        PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
+
+    let page_start: Page<Size4KiB> = Page::containing_address(VirtAddr::new(region.addr));
+    let page_end: Page<Size4KiB> =
+        Page::containing_address(VirtAddr::new(region.addr + region.len));
+
+    for page in Page::range(page_start, page_end) {
+        let offset = (page - page_start) * Size4KiB::SIZE;
+        let frame = PhysFrame::from_start_address(phys_addr + offset).unwrap();
+        let frame = unsafe { UnusedPhysFrame::new(frame) };
+        PAGE_TABLES
+            .lock()
+            .as_mut()
+            .unwrap()
+            .map_to(page, frame, flags, PHYS_MEM_ALLOC.lock().as_mut().unwrap())
+            .expect("Unable to map page")
+            .flush();
+    }
+
+    (phys_addr, region)
+}
+
+pub fn allocate_and_map_specific_phys_region(
+    start: x86_64::PhysAddr,
+    size: u64,
+) -> VirtualMemoryRegion {
+    printk!("allocate_and_map_specific_phys_region({:#x}, {:#x})\n", start, size);
+    assert!(size % Size4KiB::SIZE == 0);
+    assert!(start.as_u64() % Size4KiB::SIZE == 0);
+    let npages = (size / Size4KiB::SIZE) as usize;
+
+    let region = VirtualMemoryRegion::alloc(npages);
+    let flags =
+        PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
+
+    let page_start: Page<Size4KiB> = Page::containing_address(VirtAddr::new(region.addr));
+    let page_end: Page<Size4KiB> =
+        Page::containing_address(VirtAddr::new(region.addr + region.len));
+
+    /* TODO check if in usable phys mem range
+    PHYS_MEM_ALLOC.lock().as_mut().unwrap().remove_range(
+        (start.as_u64() / Size4KiB::SIZE) as _,
+        ((start.as_u64() + size) / Size4KiB::SIZE) as _,
+    );
+    */
+
+    for page in Page::range(page_start, page_end) {
+        let offset = (page - page_start) * Size4KiB::SIZE;
+        let frame = PhysFrame::from_start_address(start + offset).unwrap();
+        let frame = unsafe { UnusedPhysFrame::new(frame) };
+        PAGE_TABLES
+            .lock()
+            .as_mut()
+            .unwrap()
+            .map_to(page, frame, flags, PHYS_MEM_ALLOC.lock().as_mut().unwrap())
+            .expect("Unable to map page")
+            .flush();
+    }
+
+    region
 }

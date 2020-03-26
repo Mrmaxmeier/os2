@@ -61,7 +61,7 @@ class Mapping:
 class Snapshot:
     regs: Regs
     maps: [Mapping]
-    chunks: Dict[int, str]
+    chunks: [(int, str)]
 
 
 class SnapshotSave(gdb.Command):
@@ -71,9 +71,10 @@ class SnapshotSave(gdb.Command):
     def invoke(self, arg, from_tty):
         path = arg or "/tmp/snapshot.json"
         maps = []
-        chunk_data = {}
+        chunk_dict = {}
         for procmap in get_process_maps():
-            if not procmap.permission & Permission.READ:
+            if not procmap.permission & Permission.READ or procmap.path == "[vvar]":
+                # https://stackoverflow.com/questions/42730260/unable-to-access-contents-of-a-vvar-memory-region-in-gdb
                 print("unable to dump", procmap.path, "at", hex(procmap.page_start))
                 continue
             gdb.execute(
@@ -86,7 +87,7 @@ class SnapshotSave(gdb.Command):
                 key = int(hashlib.sha256(chunk).hexdigest()[:8], 16)
                 chunk = base64.b64encode(chunk).decode("ascii")
                 pages.append(key)
-                chunk_data[key] = chunk
+                chunk_dict[key] = chunk
             maps.append(
                 Mapping(
                     pages=pages,
@@ -102,7 +103,7 @@ class SnapshotSave(gdb.Command):
             k: int(gdb.parse_and_eval("$" + k.replace("rflags", "eflags")))
             for k in X86_64_REGS
         }
-        snapshot = Snapshot(regs=Regs(**registers), maps=maps, chunks=chunk_data,)
+        snapshot = Snapshot(regs=Regs(**registers), maps=maps, chunks=list(chunk_dict.items()),)
         with open(path, "w") as f:
             print("saving to", path)
             json.dump(snapshot, f, indent=2, sort_keys=True, cls=EnhancedJSONEncoder)
