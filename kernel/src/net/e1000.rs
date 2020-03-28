@@ -1,8 +1,10 @@
+#![allow(dead_code)]
 // this is mostly a port from redox/drivers/e1000d. some implementation details are borrowed from serenity/E1000NetworkAdapter.cpp
 
-fn wrap_ring(index: usize, ring_size: usize) -> usize {
-    (index + 1) & (ring_size - 1)
-}
+use smoltcp::Result;
+use smoltcp::phy::{self, DeviceCapabilities};
+use smoltcp::time::Instant;
+use alloc::vec::Vec;
 
 use crate::net::Dma;
 use tinypci::PciDeviceInfo;
@@ -94,10 +96,17 @@ const TD_CMD_IFCS: u8 = 1 << 1;
 const TD_CMD_RS: u8 = 1 << 3;
 const TD_DD: u8 = 1;
 
+static CURRENT_COM: spin::Mutex<Option<E1000Com>> = spin::Mutex::new(None);
+
+unsafe impl Send for E1000Net {}
+unsafe impl Send for E1000Com {}
+
+#[derive(Clone)]
 struct E1000Com {
     mmio_base: *mut u8,
     mmio_size: usize,
 }
+
 
 impl E1000Com {
     fn read_mac_address(&self) -> [u8; 6] {
@@ -135,16 +144,116 @@ impl E1000Com {
     }
 }
 
-pub struct E1000Net {
+fn wrap_ring(index: usize, ring_size: usize) -> usize {
+    (index + 1) & (ring_size - 1)
+}
+
+
+struct RxHalf {
     com: E1000Com,
     receive_buffer: [Dma<[u8; 16384]>; 16],
     receive_ring: Dma<[Rd; 16]>,
     receive_index: usize,
+}
+
+impl RxHalf {
+    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
+        printk!("[e1000] read()\n");
+        let desc = unsafe { &mut *(self.receive_ring.as_ptr().add(self.receive_index) as *mut Rd) };
+
+        if desc.status & RD_DD == RD_DD {
+            desc.status = 0;
+
+            let data = &self.receive_buffer[self.receive_index][..desc.length as usize];
+
+            let i = core::cmp::min(buf.len(), data.len());
+            buf[..i].copy_from_slice(&data[..i]);
+
+            self.com.out32(RDT, self.receive_index as u32);
+            self.receive_index = wrap_ring(self.receive_index, self.receive_ring.len());
+
+            printk!("[e1000] read() -> {}\n", i);
+            Some(i)
+        } else {
+            None
+        }
+    }
+
+}
+
+struct TxHalf {
+    com: E1000Com,
     transmit_buffer: [Dma<[u8; 16384]>; 16],
     transmit_ring: Dma<[Td; 16]>,
     transmit_ring_free: usize,
     transmit_index: usize,
     transmit_clean_index: usize,
+}
+
+impl TxHalf {
+
+    fn write(&mut self, buf: &[u8]) -> Option<usize> {
+        printk!("[e1000] write()\n");
+        use core::cmp;
+
+        if self.transmit_ring_free == 0 {
+            loop {
+                unsafe { asm!("nop" ::: "memory":"volatile")};
+                let desc = unsafe {
+                    &*(self.transmit_ring.as_ptr().add(self.transmit_clean_index) as *const Td)
+                };
+
+                if desc.status != 0 {
+                    self.transmit_clean_index =
+                        wrap_ring(self.transmit_clean_index, self.transmit_ring.len());
+                    self.transmit_ring_free += 1;
+                } else if self.transmit_ring_free > 0 {
+                    break;
+                }
+
+                if self.transmit_ring_free >= self.transmit_ring.len() {
+                    break;
+                }
+            }
+        }
+
+        let desc =
+            unsafe { &mut *(self.transmit_ring.as_ptr().add(self.transmit_index) as *mut Td) };
+
+        let data = unsafe {
+            alloc::slice::from_raw_parts_mut(
+                self.transmit_buffer[self.transmit_index].as_ptr() as *mut u8,
+                cmp::min(buf.len(), self.transmit_buffer[self.transmit_index].len()) as usize,
+            )
+        };
+
+        let i = cmp::min(buf.len(), data.len());
+        data[..i].copy_from_slice(&buf[..i]);
+
+        desc.cso = 0;
+        desc.command = TD_CMD_EOP | TD_CMD_IFCS | TD_CMD_RS;
+        desc.status = 0;
+        desc.css = 0;
+        desc.special = 0;
+
+        desc.length = (cmp::min(
+            buf.len(),
+            self.transmit_buffer[self.transmit_index].len() - 1,
+        )) as u16;
+
+        self.transmit_index = wrap_ring(self.transmit_index, self.transmit_ring.len());
+        self.transmit_ring_free -= 1;
+
+        self.com.out32(TDT, self.transmit_index as u32);
+
+        Some(i)
+    }
+}
+
+pub struct E1000Net {
+    com: E1000Com,
+    rx: RxHalf,
+    tx: TxHalf,
 }
 
 impl E1000Net {
@@ -219,6 +328,7 @@ impl E1000Net {
         com.out32(TDT, 0);
 
         com.out32(IMS, IMS_RXT | IMS_RX | IMS_RXDMT | IMS_RXSEQ); // | IMS_LSC | IMS_TXQE | IMS_TXDW
+        com.out32(IMS, 0); // TODO
 
         com.flag(RCTL, RCTL_EN, true);
         com.flag(RCTL, RCTL_UPE, true);
@@ -254,93 +364,27 @@ impl E1000Net {
         );
 
         E1000Net {
-            com,
-            receive_buffer,
-            receive_ring,
-            receive_index,
-            transmit_buffer,
-            transmit_ring,
-            transmit_ring_free,
-            transmit_index,
-            transmit_clean_index,
+            com: com.clone(),
+            rx: RxHalf {
+                com: com.clone(),
+                receive_buffer,
+                receive_ring,
+                receive_index,
+            },
+            tx: TxHalf {
+                com: com.clone(),
+                transmit_buffer,
+                transmit_ring,
+                transmit_ring_free,
+                transmit_index,
+                transmit_clean_index,
+            },
         }
     }
 
 
-    fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
-        let desc = unsafe { &mut *(self.receive_ring.as_ptr().add(self.receive_index) as *mut Rd) };
-
-        if desc.status & RD_DD == RD_DD {
-            desc.status = 0;
-
-            let data = &self.receive_buffer[self.receive_index][..desc.length as usize];
-
-            let i = core::cmp::min(buf.len(), data.len());
-            buf[..i].copy_from_slice(&data[..i]);
-
-            self.com.out32(RDT, self.receive_index as u32);
-            self.receive_index = wrap_ring(self.receive_index, self.receive_ring.len());
-
-            Some(i)
-        } else {
-            None
-        }
-    }
-
-    fn write(&mut self, buf: &[u8]) -> Option<usize> {
-        use core::cmp;
-
-        if self.transmit_ring_free == 0 {
-            loop {
-                unsafe { asm!("nop" ::: "memory":"volatile")};
-                let desc = unsafe {
-                    &*(self.transmit_ring.as_ptr().add(self.transmit_clean_index) as *const Td)
-                };
-
-                if desc.status != 0 {
-                    self.transmit_clean_index =
-                        wrap_ring(self.transmit_clean_index, self.transmit_ring.len());
-                    self.transmit_ring_free += 1;
-                } else if self.transmit_ring_free > 0 {
-                    break;
-                }
-
-                if self.transmit_ring_free >= self.transmit_ring.len() {
-                    break;
-                }
-            }
-        }
-
-        let desc =
-            unsafe { &mut *(self.transmit_ring.as_ptr().add(self.transmit_index) as *mut Td) };
-
-        let data = unsafe {
-            alloc::slice::from_raw_parts_mut(
-                self.transmit_buffer[self.transmit_index].as_ptr() as *mut u8,
-                cmp::min(buf.len(), self.transmit_buffer[self.transmit_index].len()) as usize,
-            )
-        };
-
-        let i = cmp::min(buf.len(), data.len());
-        data[..i].copy_from_slice(&buf[..i]);
-
-        desc.cso = 0;
-        desc.command = TD_CMD_EOP | TD_CMD_IFCS | TD_CMD_RS;
-        desc.status = 0;
-        desc.css = 0;
-        desc.special = 0;
-
-        desc.length = (cmp::min(
-            buf.len(),
-            self.transmit_buffer[self.transmit_index].len() - 1,
-        )) as u16;
-
-        self.transmit_index = wrap_ring(self.transmit_index, self.transmit_ring.len());
-        self.transmit_ring_free -= 1;
-
-        self.com.out32(TDT, self.transmit_index as u32);
-
-        Some(i)
+    pub fn mac_address(&self) -> [u8; 6] {
+        self.com.read_mac_address()
     }
 }
 
@@ -357,38 +401,87 @@ pub fn setup_1000e(dev: &PciDeviceInfo) -> E1000Net {
     // printk!("memory_space_bar = {:#x}\n", memory_space_bar);
     // printk!("io_space_bar = {:#x}\n", io_space_bar);
 
+    let interrupt_line = dev.interrupt_line;
+
     let mmio = crate::memory::allocate_and_map_specific_phys_region(
         x86_64::PhysAddr::new(memory_space_bar as u64),
         dev.bar_sizes[0] as u64,
     );
 
     dev.enable_bus_mastering();
-    let mut dev = E1000Net::initialize(E1000Com {
+    let dev = E1000Net::initialize(E1000Com {
         mmio_base: mmio.start(),
         mmio_size: mmio.len() as usize,
     });
 
-    let mut buf = alloc::vec::Vec::new();
-    for _ in 0..8096 {
-        buf.push(0u8);
-    }
-    loop {
-        // printk!("dev.transmit_ring_free: {}\n", dev.transmit_ring_free);
-        let res = dev.read(&mut buf);
-        if let Some(x) = res {
-            printk!("dev.read: {:#x?}\n", &buf[..x]);
-        }
-        let mut packet = alloc::vec::Vec::new();
-        packet.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-        packet.extend_from_slice(&dev.com.read_mac_address());
-        packet.extend_from_slice(&[0x08, 0x00]); // Type: IPv4
-        packet.extend_from_slice(&[0x45, 0x00, 0x00, 0x24, 0x23, 0x47, 0x40, 0x00, 0x40, 0x11, 0xa4, 0xb2, 0xc0, 0xa8, 0xb2, 0x27, 0xff, 0xff, 0xff, 0xff]); // IP Header
-        packet.extend_from_slice(&[0xe9, 0xd2, 0x5d, 0xc0, 0x00, 0x10, 0x72, 0xf1]); // UDP Header
-        packet.extend_from_slice(b"TESTING"); // Payload
+    *CURRENT_COM.lock() = Some(E1000Com {
+        mmio_base: mmio.start(),
+        mmio_size: mmio.len() as usize,
+    });
 
-        let res = dev.write(&packet);
-        // printk!("dev.write: {:?}\n", res);
-    }
+    crate::interrupts::register_irq(interrupt_line as _, &interrupt_handler);
 
     dev
+}
+
+
+fn interrupt_handler() {
+    let _com = CURRENT_COM.lock();
+    let com = _com.as_ref().unwrap();
+    printk!("[e1000] ICR: {:#x}\n", com.in32(ICR));
+}
+
+
+const MTU: usize = 1536;
+
+impl<'a> smoltcp::phy::Device<'a> for E1000Net {
+    type RxToken = E1000NetRxToken<'a>;
+    type TxToken = E1000NetTxToken<'a>;
+
+    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        Some((E1000NetRxToken(&mut self.rx),
+              E1000NetTxToken(&mut self.tx)))
+    }
+
+    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        Some(E1000NetTxToken(&mut self.tx))
+    }
+
+    fn capabilities(&self) -> DeviceCapabilities {
+        let mut caps = DeviceCapabilities::default();
+        caps.max_transmission_unit = MTU;
+        caps.max_burst_size = None;
+        caps
+    }
+}
+
+pub struct E1000NetRxToken<'a>(&'a mut RxHalf);
+
+impl<'a> phy::RxToken for E1000NetRxToken<'a> {
+    fn consume<R, F>(self, _timestamp: Instant, f: F) -> Result<R>
+        where F: FnOnce(&mut [u8]) -> Result<R>
+    {
+        let mut buf = Vec::new();
+        buf.resize(MTU, 0);
+        let res = self.0.read(&mut buf);
+        let size = res.ok_or(smoltcp::Error::Exhausted)?;
+        buf.truncate(size);
+        f(&mut buf)
+    }
+}
+
+pub struct E1000NetTxToken<'a>(&'a mut TxHalf);
+
+impl<'a> phy::TxToken for E1000NetTxToken<'a> {
+    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> Result<R>
+        where F: FnOnce(&mut [u8]) -> Result<R>
+    {
+        let mut buf = Vec::new();
+        buf.resize(len, 0);
+        let result = f(&mut buf)?;
+        printk!("tx called {}", len);
+        let written = self.0.write(&buf).ok_or(smoltcp::Error::Exhausted)?;
+        assert_eq!(written, len);
+        Ok(result)
+    }
 }

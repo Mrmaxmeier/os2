@@ -31,7 +31,7 @@ use memory::{map_region, VirtualMemoryRegion};
 
 use x86_64::structures::paging::PageTableFlags;
 
-pub const PAGING_DEBUG: bool = true;
+pub const PAGING_DEBUG: bool = false;
 
 /// The kernel heap
 #[global_allocator]
@@ -62,7 +62,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     memory::init(unsafe { &mut ALLOCATOR }, boot_info);
     // remove stack range from allocatable memory
-    unsafe { memory::VirtualMemoryRegion::take_range(0x10000000000, 0x100003fffff) };
+    unsafe { memory::VirtualMemoryRegion::take_range(0x100_0000_0000, 0x100_003f_ffff) };
     printk!("[DONE] Memory    \n");
 
     // Set up interrupt/exception handling
@@ -87,25 +87,27 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         printk!("[DONE] Time    \n");
     }
 
+    let mut netdev = None;
     for dev in tinypci::brute_force_scan() {
-        /*
         printk!(
-            "PCI {:x}:{:x}: {:?}\n",
+            "[@PCI] {:x}:{:x}: {:?}\n",
             dev.vendor_id,
             dev.device_id,
             dev.full_class
         );
-        */
         if dev.vendor_id == 0x8086 && dev.device_id == 0x100e {
-            printk!("{}\n", dev);
-            net::setup_1000e(&dev);
+            // printk!("{}\n", dev);
+            netdev = Some(net::setup_1000e(&dev));
         }
     }
     printk!("[DONE] Enumerating PCI devices\n");
+    printk!("[    ] Network ...\r");
+    net::init(netdev.unwrap());
+    printk!("[DONE] Network    \n");
 
     snapshot::init();
 
-    let code = unsafe { VirtualMemoryRegion::take_range(0x133713370000, 0x133713370fff) };
+    let code = unsafe { VirtualMemoryRegion::take_range(0x1337_1337_0000, 0x1337_1337_0fff) };
     {
         map_region(
             code.clone(),
@@ -118,8 +120,5 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     let stack = sched::user::allocate_user_stack();
     printk!("userspace stack: {:#x?}\n", stack);
-    printk!("[    ] Userspace ...\r");
     sched::user::start_user_task(code.start() as usize, stack);
-    printk!("[DONE] Userspace    \n");
-    // todo!();
 }

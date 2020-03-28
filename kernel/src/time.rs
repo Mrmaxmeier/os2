@@ -29,6 +29,11 @@ impl SysTime {
     pub fn after_ms(self, millis: usize) -> Self {
         SysTime(self.0 + millis * PIT_HZ / 1000)
     }
+
+    /// Get the time after boot in millis.
+    pub fn millis(self) -> i64 {
+        (self.0 as i64 * PIT_HZ as i64) / 1000
+    }
 }
 
 /// Tick the clock atomically.

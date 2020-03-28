@@ -17,6 +17,8 @@ pub use self::pit::HZ as PIT_HZ;
 mod pic;
 mod pit;
 
+pub use pic::register_irq;
+
 /// Number of bytes of the IST stack frame.
 const IST_FRAME_SIZE: usize = 4096;
 

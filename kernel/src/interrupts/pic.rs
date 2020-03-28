@@ -123,6 +123,23 @@ fn pic_eoi(irq: u8) {
     }
 }
 
+use spin::Mutex;
+type InterruptHandler = &'static (dyn Fn() + Sync);
+static INTERRUPT_HANDLERS: Mutex<[Option<(usize, InterruptHandler)>; 4]> = Mutex::new([None; 4]);
+
+pub fn register_irq(irq: usize, f: InterruptHandler) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut handlers = INTERRUPT_HANDLERS.lock();
+        for handler in handlers.iter_mut() {
+            if handler.is_none() {
+                *handler = Some((irq, f));
+                return;
+            }
+        }
+        panic!("that's a lot of interrupt handlers");
+    });
+}
+
 /// IRQ handler
 ///
 /// For more info on IRQ handlers: https://wiki.osdev.org/Interrupts
@@ -130,6 +147,19 @@ fn pic_eoi(irq: u8) {
 /// Note that this should _not_ be confused with _exceptions_. For more info on x86 exceptions, see
 /// https://wiki.osdev.org/Exceptions
 fn pic_irq(irq: usize, _: &mut InterruptStackFrame) {
+
+
+    let mut handled = false;
+    let handlers = INTERRUPT_HANDLERS.lock();
+    for handler in handlers.iter() {
+        if let Some((irq_, f)) = handler {
+            if irq == *irq_ {
+                handled = true;
+                f();
+            }
+        }
+    }
+
     // execute handler
     match irq {
         // PIT interrupts
@@ -151,8 +181,10 @@ fn pic_irq(irq: usize, _: &mut InterruptStackFrame) {
 
         // Other (unknown) interrupts
         _ => {
-            interrupts::disable();
-            panic!("unknown interrupt {}\n", irq)
+            if !handled {
+                interrupts::disable();
+                panic!("unknown interrupt {}\n", irq)
+            }
         }
     }
 

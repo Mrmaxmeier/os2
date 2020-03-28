@@ -518,7 +518,7 @@ pub fn allocate_and_map_specific_phys_region(
     start: x86_64::PhysAddr,
     size: u64,
 ) -> VirtualMemoryRegion {
-    printk!("allocate_and_map_specific_phys_region({:#x}, {:#x})\n", start, size);
+    // printk!("allocate_and_map_specific_phys_region({:#x}, {:#x})\n", start, size);
     assert!(size % Size4KiB::SIZE == 0);
     assert!(start.as_u64() % Size4KiB::SIZE == 0);
     let npages = (size / Size4KiB::SIZE) as usize;

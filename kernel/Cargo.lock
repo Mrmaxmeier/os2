@@ -33,6 +33,12 @@ version = "0.1.0"
 source = "git+https://github.com/Mrmaxmeier/buddy#44af8ade616ad06fcb4483288d22bcab5caa8d0f"
 
 [[package]]
+name = "byteorder"
+version = "1.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c48aae112d48ed9f069b33538ea9e3e90aa263cfa3d1c24309612b1f7472de"
+
+[[package]]
 name = "cast"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -62,10 +68,17 @@ dependencies = [
  "os_bootinfo",
  "shared",
  "smallheap",
+ "smoltcp",
  "spin",
  "tinypci",
  "x86_64",
 ]
+
+[[package]]
+name = "managed"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdcec5e97041c7f0f1c5b7d93f12e57293c831c646f4cc7a5db59460c7ea8de6"
 
 [[package]]
 name = "nodrop"
@@ -165,6 +178,17 @@ version = "0.1.0"
 source = "git+https://github.com/mark-i-m/smallheap#feb35271a49912e003365c94f81a89565906e97b"
 
 [[package]]
+name = "smoltcp"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fe46639fd2ec79eadf8fe719f237a7a0bd4dac5d957f1ca5bbdbc1c3c39e53a"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "managed",
+]
+
+[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -184,6 +208,7 @@ dependencies = [
 [[package]]
 name = "tinypci"
 version = "0.1.0"
+source = "git+https://github.com/Mrmaxmeier/tinypci#329bf8c03b24bc02577ebac2e48769dbcebdc016"
 
 [[package]]
 name = "unicode-xid"
