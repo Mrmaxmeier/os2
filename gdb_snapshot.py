@@ -92,15 +92,16 @@ class SnapshotSave(gdb.Command):
                 Mapping(
                     pages=pages,
                     page_start=procmap.page_start,
-                    page_end=procmap.page_end,
+                    page_end=procmap.page_end - 1,
                     perm_r=(procmap.permission & Permission.READ) != 0,
                     perm_w=(procmap.permission & Permission.WRITE) != 0,
                     perm_x=(procmap.permission & Permission.EXECUTE) != 0,
                     hint=procmap.path,
                 )
             )
+        register_value = lambda s: int(gdb.parse_and_eval(s)) & ((1<<64)-1)
         registers = {
-            k: int(gdb.parse_and_eval("$" + k.replace("rflags", "eflags")))
+            k: register_value("$" + k.replace("rflags", "eflags"))
             for k in X86_64_REGS
         }
         snapshot = Snapshot(regs=Regs(**registers), maps=maps, chunks=list(chunk_dict.items()),)

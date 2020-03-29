@@ -60,20 +60,20 @@ pub fn init(allocator: &mut KernelAllocator, start: usize, size: usize) {
 
     let free_size = allocator.size();
 
-    /*
-    printk!(
-        "\theap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
-        start,
-        start + size,
-        free_size,
-    );
-    */
+    if crate::PAGING_DEBUG {
+        printk!(
+            "\theap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
+            start,
+            start + size,
+            free_size,
+        );
+    }
 }
 
 #[alloc_error_handler]
 #[cfg(not(test))] // rust-analyzer is confused by a 'duplicate definition' in std via test
-fn oom(_: Layout) -> ! {
-    panic!("OOM!");
+fn oom(layout: Layout) -> ! {
+    panic!("OOM! Failed to allocate {} bytes.", layout.size());
 }
 
 pub mod early {

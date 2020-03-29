@@ -44,3 +44,23 @@ macro_rules! printk {
         let _ = write!($crate::debug::Debug, $($arg)*);
     })
 }
+
+/*
+pub struct Logger;
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool { true }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let target = if record.target().len() > 0 {
+                record.target()
+            } else {
+                record.module_path().unwrap_or_default()
+            };
+            printk!("{:<5} [{}] {}\n", record.level(), target, record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+*/

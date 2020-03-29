@@ -5,7 +5,6 @@
     box_syntax,
     abi_x86_interrupt,
     panic_info_message,
-    drain_filter,
     naked_functions
 )]
 // Compile without libstd
@@ -27,11 +26,9 @@ mod snapshot;
 mod time;
 
 use bootloader::BootInfo;
-use memory::{map_region, VirtualMemoryRegion};
+use memory::map_region;
 
-use x86_64::structures::paging::PageTableFlags;
-
-pub const PAGING_DEBUG: bool = false;
+pub const PAGING_DEBUG: bool = true;
 
 /// The kernel heap
 #[global_allocator]
@@ -89,36 +86,36 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     let mut netdev = None;
     for dev in tinypci::brute_force_scan() {
+        /*
         printk!(
-            "[@PCI] {:x}:{:x}: {:?}\n",
+            "PCI: {:x}:{:x}: {:?}\n",
             dev.vendor_id,
             dev.device_id,
             dev.full_class
         );
+        */
         if dev.vendor_id == 0x8086 && dev.device_id == 0x100e {
             // printk!("{}\n", dev);
             netdev = Some(net::setup_1000e(&dev));
         }
     }
+
+    /*
+    log::set_logger(&crate::debug::Logger).unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    */
+
     printk!("[DONE] Enumerating PCI devices\n");
     printk!("[    ] Network ...\r");
-    net::init(netdev.unwrap());
-    printk!("[DONE] Network    \n");
+    let mut network = net::init(netdev.unwrap());
+    printk!("[IDLE] Waiting for TCP connection on :1234 ...\r");
+    network.wait_for_connection()
+        .expect("network error");
+    printk!("[DONE] Got connection on :1234                \n");
 
-    snapshot::init();
-
-    let code = unsafe { VirtualMemoryRegion::take_range(0x1337_1337_0000, 0x1337_1337_0fff) };
-    {
-        map_region(
-            code.clone(),
-            PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE,
-        );
-        let data = [0x90, 0x90, 0x0f, 0x05, 0xcc];
-        for i in 0..data.len() {
-            unsafe { code.start().add(i).write_volatile(data[i]) };
-        }
-    }
-    let stack = sched::user::allocate_user_stack();
-    printk!("userspace stack: {:#x?}\n", stack);
-    sched::user::start_user_task(code.start() as usize, stack);
+    printk!("[****] Starting Session ...\n");
+    let mut session = snapshot::Session::new(network);
+    session.recv_snapshot();
+    session.setup_pages();
+    session.run();
 }

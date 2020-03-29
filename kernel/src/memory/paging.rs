@@ -13,6 +13,7 @@
 //! the bootload for page tables, kernel text, etc...
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 
 use bootloader::BootInfo;
 
@@ -49,6 +50,9 @@ static PAGE_TABLES: Mutex<Option<RecursivePageTable>> = Mutex::new(None);
 /// TODO: We should check permissions/capabilities for the fault first.
 static ALLOWED: Mutex<Option<BTreeMap<u64, (u64, PageTableFlags)>>> = Mutex::new(None);
 
+// Format: (start, (flags, initial_data))
+static SNAPSHOT_PAGES: Mutex<Option<BTreeMap<u64, (PageTableFlags, Vec<u8>)>>> = Mutex::new(None);
+
 /// Address of guard page of the kernel heap (page before the first page of the heap).
 pub const KERNEL_HEAP_GUARD: u64 = (32 << 20) - (1 << 12);
 
@@ -58,7 +62,7 @@ pub const KERNEL_HEAP_START: u64 = KERNEL_HEAP_GUARD + (1 << 12);
 
 /// The size of the kernel heap (bytes). Needs to be a multiple of 2MiB because we map it using
 /// 2MiB pages.
-pub const KERNEL_HEAP_SIZE: u64 = 4 << 20; // 4MiB
+pub const KERNEL_HEAP_SIZE: u64 = 64 << 20; // 64MiB
 
 /// The number of bits of virtual address space.
 const ADDRESS_SPACE_WIDTH: u8 = 48;
@@ -268,6 +272,9 @@ pub fn init(boot_info: &'static BootInfo) {
     let mut allowed = ALLOWED.lock();
     *allowed = Some(BTreeMap::new());
 
+    let mut snapshot_pages = SNAPSHOT_PAGES.lock();
+    *snapshot_pages = Some(BTreeMap::new());
+
     // printk!("\tvirtual address allocator inited\n");
 
     ///////////////////////////////////////////////////////////////////////////
@@ -382,7 +389,8 @@ impl VirtualMemoryRegion {
         assert!(start % Size4KiB::SIZE == 0);
         assert!((end+1) % Size4KiB::SIZE == 0);
         let start_page = start / Size4KiB::SIZE;
-        let end_page = (end+1) / Size4KiB::SIZE;
+        let end_page = end / Size4KiB::SIZE;
+        printk!("take_range(start_page={:#x}, end_page={:#x})\n", start_page, end_page);
         VIRT_MEM_ALLOC
             .lock()
             .as_mut()
@@ -404,6 +412,16 @@ pub fn map_region(region: VirtualMemoryRegion, flags: PageTableFlags) {
         .as_mut()
         .unwrap()
         .insert(start as u64, (len, flags));
+}
+
+pub fn map_snapshot_region(region: VirtualMemoryRegion, flags: PageTableFlags, data: Vec<u8>) {
+    // FIXME: how to handle non-pie binaries here?
+    // ^ probably needs a different page-table for userland
+    SNAPSHOT_PAGES
+        .lock()
+        .as_mut()
+        .unwrap()
+        .insert(region.start() as u64, (flags, data));
 }
 
 /// Handle a page fault
@@ -428,6 +446,61 @@ pub extern "x86-interrupt" fn handle_page_fault(
         };
     }
 
+    printk!("handle_page_fault({:#x})\n", cr2);
+    {
+
+        PAGE_TABLES.lock();
+        PHYS_MEM_ALLOC.lock();
+    }
+    printk!("test\n");
+    if let Some((&start, (flags, data))) = SNAPSHOT_PAGES.lock().as_ref().unwrap().range(0..=cr2).next_back() {
+        let len = data.len() as u64;
+        if cr2 >= start && cr2 < start + len {
+            printk!(
+                "SNAPSHOT_PAGES fault\n\tip {:x}, addr {:x}.\n\tFound region start: {:x}, len: {}\n\tflags: {:?}\n",
+                esf.instruction_pointer.as_u64(),
+                cr2,
+                start,
+                len,
+                flags
+            );
+
+            assert!(flags.contains(PageTableFlags::USER_ACCESSIBLE));
+
+            // Map the correct region
+            let page: Page<Size4KiB> =
+                Page::containing_address(VirtAddr::new(cr2));
+            let frame = {
+                PHYS_MEM_ALLOC
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .allocate_frame()
+                    .expect("Unable to allocate physical memory")
+            };
+            printk!("alloc done\n");
+            printk!("mapping {:#x?} to {:#x?}\n", page, frame);
+            printk!("p4: {:?} p3: {:?} p2: {:?} p1: {:?}\n", page.p4_index(), page.p3_index(), page.p2_index(), page.p1_index());
+            PAGE_TABLES
+                .lock()
+                .as_mut()
+                .unwrap()
+                .map_to(page, frame, *flags, PHYS_MEM_ALLOC.lock().as_mut().unwrap())
+                .expect("Unable to map page")
+                .flush();
+            printk!("pt done\n");
+            // Fill page
+            let page_offset = page.start_address().as_u64() - start;
+            let page_slice: &mut [u8; 4096] = unsafe { &mut *page.start_address().as_mut_ptr() };
+            let fill_with = &data[page_offset as usize..][..Size4KiB::SIZE as usize];
+            printk!("filling page {:#x} with {:#x} bytes\n", page.start_address().as_u64(), fill_with.len());
+            page_slice.copy_from_slice(fill_with);
+            printk!("done!\n");
+            return;
+        }
+    }
+
+
     // Check if the page is allowed. We need to check if any range contains the fault address. Such
     // a range would be the last (and only) range to possibly contain this range -- that is, we
     // need to find the last region before cr2. Then, we need to check that cr2 is within that
@@ -446,7 +519,7 @@ pub extern "x86-interrupt" fn handle_page_fault(
 
             // Map the correct region
             let page: Page<Size4KiB> =
-                Page::from_start_address(VirtAddr::new(start)).expect("Region is unaligned");
+                Page::containing_address(VirtAddr::new(cr2));
             let frame = PHYS_MEM_ALLOC
                 .lock()
                 .as_mut()

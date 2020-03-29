@@ -149,22 +149,22 @@ pub fn init() {
     }
 }
 
-pub fn start_user_task(rip: usize, stack: VirtualMemoryRegion) -> ! {
+pub fn start_user_task(regs: SavedRegs) -> ! {
     // Compute new register values
+    /*
     let rsp = {
         let start = stack.start();
         let len = stack.len();
         unsafe { start.offset(len as isize) }
     };
+    */
 
     // Enable interrupts for user mode.
     let rflags = (rflags::read() | rflags::RFlags::INTERRUPT_FLAG).bits();
 
     let registers = SavedRegs {
-        rip: rip as u64,
-        rsp: rsp as u64,
         rflags,
-        ..SavedRegs::default()
+        ..regs
     };
 
     syscall::switch_to_user(&registers)

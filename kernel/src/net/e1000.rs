@@ -158,7 +158,6 @@ struct RxHalf {
 
 impl RxHalf {
     fn read(&mut self, buf: &mut [u8]) -> Option<usize> {
-        printk!("[e1000] read()\n");
         let desc = unsafe { &mut *(self.receive_ring.as_ptr().add(self.receive_index) as *mut Rd) };
 
         if desc.status & RD_DD == RD_DD {
@@ -172,13 +171,16 @@ impl RxHalf {
             self.com.out32(RDT, self.receive_index as u32);
             self.receive_index = wrap_ring(self.receive_index, self.receive_ring.len());
 
-            printk!("[e1000] read() -> {}\n", i);
             Some(i)
         } else {
             None
         }
     }
 
+    fn can_read(&self) -> bool {
+        let desc = unsafe { &mut *(self.receive_ring.as_ptr().add(self.receive_index) as *mut Rd) };
+        desc.status & RD_DD == RD_DD
+    }
 }
 
 struct TxHalf {
@@ -193,12 +195,10 @@ struct TxHalf {
 impl TxHalf {
 
     fn write(&mut self, buf: &[u8]) -> Option<usize> {
-        printk!("[e1000] write()\n");
         use core::cmp;
 
         if self.transmit_ring_free == 0 {
             loop {
-                unsafe { asm!("nop" ::: "memory":"volatile")};
                 let desc = unsafe {
                     &*(self.transmit_ring.as_ptr().add(self.transmit_clean_index) as *const Td)
                 };
@@ -248,6 +248,19 @@ impl TxHalf {
 
         Some(i)
     }
+
+    fn can_write(&mut self) -> bool {
+        if self.transmit_ring_free == 0 {
+            let desc = unsafe {
+                &*(self.transmit_ring.as_ptr().add(self.transmit_clean_index) as *const Td)
+            };
+
+            if desc.status != 0 {
+                return true;
+            }
+        }
+        self.transmit_ring_free > 0
+    }
 }
 
 pub struct E1000Net {
@@ -281,11 +294,11 @@ impl E1000Net {
 
         // assert!(com.detect_eeprom());
         let mac_addr = com.read_mac_address();
-        printk!("[e1000] Link address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+        printk!("[ e1k] Link address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n", mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
 
         com.flag(CTRL, CTRL_RST, true);
         while com.in32(CTRL) & CTRL_RST == CTRL_RST {
-            printk!("[e1000] Waiting for reset: {:X}\n", com.in32(CTRL));
+            printk!("[ e1k] Waiting for reset: {:X}\n", com.in32(CTRL));
         }
 
         // Enable auto negotiate, link, clear reset, do not Invert Loss-Of Signal
@@ -352,10 +365,10 @@ impl E1000Net {
         // TODO ...
 
         while com.in32(STATUS) & 2 != 2 {
-            printk!("[e1000] Waiting for link up: {:X}\n", com.in32(STATUS));
+            printk!("[ e1k] Waiting for link up: {:X}\n", com.in32(STATUS));
         }
         printk!(
-            "[e1000] Link is up with speed {}\n",
+            "[ e1k] Link is up with speed {}\n",
             match (com.in32(STATUS) >> 6) & 0b11 {
                 0b00 => "10 Mb/s",
                 0b01 => "100 Mb/s",
@@ -428,29 +441,38 @@ pub fn setup_1000e(dev: &PciDeviceInfo) -> E1000Net {
 fn interrupt_handler() {
     let _com = CURRENT_COM.lock();
     let com = _com.as_ref().unwrap();
-    printk!("[e1000] ICR: {:#x}\n", com.in32(ICR));
+    let _interrupt_cause = com.in32(ICR);
+    // printk!("[ e1k] ICR: {:#x}\n", interrupt_cause);
 }
 
 
-const MTU: usize = 1536;
+const MTU: usize = 2048; // next pow2 after 1536
 
 impl<'a> smoltcp::phy::Device<'a> for E1000Net {
     type RxToken = E1000NetRxToken<'a>;
     type TxToken = E1000NetTxToken<'a>;
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
-        Some((E1000NetRxToken(&mut self.rx),
-              E1000NetTxToken(&mut self.tx)))
+        if self.rx.can_read() {
+            Some((E1000NetRxToken(&mut self.rx),
+                E1000NetTxToken(&mut self.tx)))
+        } else {
+            None
+        }
     }
 
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
-        Some(E1000NetTxToken(&mut self.tx))
+        if self.tx.can_write() {
+            Some(E1000NetTxToken(&mut self.tx))
+        } else {
+            None
+        }
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.max_transmission_unit = MTU;
-        caps.max_burst_size = None;
+        caps.max_burst_size = Some(16);
         caps
     }
 }
@@ -461,7 +483,7 @@ impl<'a> phy::RxToken for E1000NetRxToken<'a> {
     fn consume<R, F>(self, _timestamp: Instant, f: F) -> Result<R>
         where F: FnOnce(&mut [u8]) -> Result<R>
     {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(MTU);
         buf.resize(MTU, 0);
         let res = self.0.read(&mut buf);
         let size = res.ok_or(smoltcp::Error::Exhausted)?;
@@ -479,7 +501,6 @@ impl<'a> phy::TxToken for E1000NetTxToken<'a> {
         let mut buf = Vec::new();
         buf.resize(len, 0);
         let result = f(&mut buf)?;
-        printk!("tx called {}", len);
         let written = self.0.write(&buf).ok_or(smoltcp::Error::Exhausted)?;
         assert_eq!(written, len);
         Ok(result)
