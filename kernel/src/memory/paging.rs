@@ -12,8 +12,9 @@
 //! `BootInfo` struct contains the current state of memory, including memory already allocated by
 //! the bootload for page tables, kernel text, etc...
 
+#![allow(dead_code)]
+
 use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
 
 use bootloader::BootInfo;
 
@@ -51,7 +52,7 @@ static PAGE_TABLES: Mutex<Option<RecursivePageTable>> = Mutex::new(None);
 static ALLOWED: Mutex<Option<BTreeMap<u64, (u64, PageTableFlags)>>> = Mutex::new(None);
 
 // Format: (start, (flags, initial_data))
-static SNAPSHOT_PAGES: Mutex<Option<BTreeMap<u64, (PageTableFlags, Vec<u8>)>>> = Mutex::new(None);
+static SNAPSHOT_PAGES: Mutex<Option<BTreeMap<u64, (PageTableFlags, [u8; Size4KiB::SIZE as usize])>>> = Mutex::new(None);
 
 /// Address of guard page of the kernel heap (page before the first page of the heap).
 pub const KERNEL_HEAP_GUARD: u64 = (32 << 20) - (1 << 12);
@@ -414,14 +415,14 @@ pub fn map_region(region: VirtualMemoryRegion, flags: PageTableFlags) {
         .insert(start as u64, (len, flags));
 }
 
-pub fn map_snapshot_region(region: VirtualMemoryRegion, flags: PageTableFlags, data: Vec<u8>) {
+pub fn map_snapshot_page(page_start: u64, flags: PageTableFlags, data: &[u8; 4096]) {
     // FIXME: how to handle non-pie binaries here?
     // ^ probably needs a different page-table for userland
     SNAPSHOT_PAGES
         .lock()
         .as_mut()
         .unwrap()
-        .insert(region.start() as u64, (flags, data));
+        .insert(page_start, (flags, data.clone()));
 }
 
 /// Handle a page fault
@@ -478,24 +479,37 @@ pub extern "x86-interrupt" fn handle_page_fault(
                     .allocate_frame()
                     .expect("Unable to allocate physical memory")
             };
-            printk!("alloc done\n");
             printk!("mapping {:#x?} to {:#x?}\n", page, frame);
-            printk!("p4: {:?} p3: {:?} p2: {:?} p1: {:?}\n", page.p4_index(), page.p3_index(), page.p2_index(), page.p1_index());
+            let tmp_flags = *flags | PageTableFlags::WRITABLE;
             PAGE_TABLES
                 .lock()
                 .as_mut()
                 .unwrap()
-                .map_to(page, frame, *flags, PHYS_MEM_ALLOC.lock().as_mut().unwrap())
+                .map_to(page, frame, tmp_flags, PHYS_MEM_ALLOC.lock().as_mut().unwrap())
                 .expect("Unable to map page")
                 .flush();
-            printk!("pt done\n");
             // Fill page
             let page_offset = page.start_address().as_u64() - start;
-            let page_slice: &mut [u8; 4096] = unsafe { &mut *page.start_address().as_mut_ptr() };
-            let fill_with = &data[page_offset as usize..][..Size4KiB::SIZE as usize];
-            printk!("filling page {:#x} with {:#x} bytes\n", page.start_address().as_u64(), fill_with.len());
-            page_slice.copy_from_slice(fill_with);
+            // let page_slice: &mut [u8; 4096] = unsafe { &mut *page.start_address().as_mut_ptr() };
+            // let fill_with = &data[page_offset as usize..][..Size4KiB::SIZE as usize];
+            printk!("filling page {:#x} with {:#x} bytes\n", page.start_address().as_u64(), Size4KiB::SIZE);
+            let dst: *mut u8 = page.start_address().as_mut_ptr();
+            unsafe { 
+                let src = data.as_ptr().add(page_offset as _);
+                core::ptr::copy(src, dst, Size4KiB::SIZE as _);
+            }
+            if *flags != tmp_flags {
+                printk!("remapping because page is not supposed to be writable. -> {:?}\n", flags);
+                PAGE_TABLES
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .update_flags(page, *flags)
+                    .expect("Unable to map page")
+                    .flush();
+            }
             printk!("done!\n");
+            printk!("*{:#x} = {:#x}\n", cr2, unsafe { core::ptr::read_volatile(cr2 as *const u8) });
             return;
         }
     }
@@ -625,4 +639,18 @@ pub fn allocate_and_map_specific_phys_region(
     }
 
     region
+}
+
+
+pub fn snapshot_pages_unmap_dirty() {
+    let mut page_tables_ = PAGE_TABLES.lock();
+    let page_tables = page_tables_.as_mut().unwrap();
+    for (page_addr, (_, _)) in SNAPSHOT_PAGES.lock().as_ref().unwrap() {
+        let page = Page::containing_address(VirtAddr::new(*page_addr));
+        if let Ok(flags) = page_tables.fetch_flags(page) {
+            if flags.contains(PageTableFlags::DIRTY) {
+                page_tables.unmap(page).unwrap().1.flush();
+            }
+        }
+    }
 }

@@ -108,13 +108,13 @@ pub mod early {
 
         allocator.set_heap(heap);
 
-        /*
-        printk!(
-            "\tearly heap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
-            init_heap_start as usize,
-            init_heap_start as usize + INITIAL_KHEAP_SPACE_SIZE,
-            free_size,
-        );
-        */
+        if crate::PAGING_DEBUG {
+            printk!(
+                "\tearly heap inited - start addr: 0x{:x}, end addr: 0x{:x}, {} bytes\n",
+                init_heap_start as usize,
+                init_heap_start as usize + INITIAL_KHEAP_SPACE_SIZE,
+                free_size,
+            );
+        }
     }
 }

@@ -18,16 +18,18 @@ run-command = [
 compiler_builtins = { git = "https://github.com/rust-lang/compiler-builtins" }
 spin = "0.5"
 smallheap = { git = "https://github.com/mark-i-m/smallheap", features = ["no_std"] }
-buddy = { git = "https://github.com/Mrmaxmeier/buddy" }
-# buddy = { path = "../buddy" }
+# buddy = { git = "https://github.com/Mrmaxmeier/buddy" }
+buddy = { path = "../buddy" }
 # x86_64 = "0.9.6"
-x86_64 = { git = "https://github.com/mark-i-m/x86_64", branch = "fix-flags" }
+# x86_64 = { git = "https://github.com/mark-i-m/x86_64", branch = "fix-flags" }
+x86_64 = { path = "../x86_64" }
 os_bootinfo = "0.2.1"
 bootloader = { version = "0.9.0", features = ["recursive_page_table"]}
 # vga = "0.1.0"
 shared = { path = "../shared" }
 tinypci = { git= "https://github.com/Mrmaxmeier/tinypci", default-features = false }
 smoltcp = { version = "0.6.0", default-features = false, features = [
+  # "log",
   "alloc",
   "ethernet",
   "proto-ipv4", "proto-igmp", "proto-ipv6", "proto-dhcpv4",

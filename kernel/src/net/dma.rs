@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::memory::allocate_and_map_contiguous_phys_region;
 use core::ops::{Deref, DerefMut};
 use core::{mem, ptr};

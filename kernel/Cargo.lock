@@ -30,7 +30,6 @@ checksum = "47a31d0af1b59774ea1470bf40b4bf9fed0bbead2f2d9d614c4c2e13382414dd"
 [[package]]
 name = "buddy"
 version = "0.1.0"
-source = "git+https://github.com/Mrmaxmeier/buddy#44af8ade616ad06fcb4483288d22bcab5caa8d0f"
 
 [[package]]
 name = "byteorder"
@@ -219,7 +218,6 @@ checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
 [[package]]
 name = "x86_64"
 version = "0.8.2"
-source = "git+https://github.com/mark-i-m/x86_64?branch=fix-flags#1e80bd9bdb030649f3d26830bd85230fd3f36f6f"
 dependencies = [
  "array-init",
  "bit_field",

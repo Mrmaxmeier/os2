@@ -1,11 +1,10 @@
 use shared::{AdminToNode, NodeToAdmin};
 use crate::net::Network;
 use crate::memory::VirtualMemoryRegion;
-use crate::map_region;
 use crate::sched;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-use x86_64::structures::paging::PageTableFlags;
+use x86_64::structures::paging::{Size4KiB, PageSize, PageTableFlags};
 
 pub struct Session<'a, 'b, 'c> {
     net: Network<'a, 'b, 'c>,
@@ -80,18 +79,20 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
         for mapping in &mappings {
             let region = self.user_range(mapping.page_start, mapping.page_end);
             let mut flags = PageTableFlags::PRESENT;
-            flags.set(PageTableFlags::USER_ACCESSIBLE, mapping.perm_r);
+            flags.set(PageTableFlags::USER_ACCESSIBLE, true || mapping.perm_r);
             flags.set(PageTableFlags::WRITABLE, mapping.perm_w);
             flags.set(PageTableFlags::NO_EXECUTE, !mapping.perm_x);
-            let mut data = Vec::new();
+            let mut page_start = mapping.page_start;
             for page_id in &mapping.pages {
-                data.extend_from_slice(self.page_cache.get(page_id).expect("mapping references unknown page hash"));
+                let data = self.page_cache.get(page_id).expect("mapping references unknown page hash");
+                crate::memory::map_snapshot_page(page_start, flags, data);
+                page_start += Size4KiB::SIZE;
             }
-            crate::memory::map_snapshot_region(region, flags, data);
         }
     }
 
     pub fn run(&mut self) -> ! {
+        crate::memory::snapshot_pages_unmap_dirty();
         let shared::SavedRegs {
             rax,
             rbx,
@@ -112,7 +113,7 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
             rip,
             rsp,
         } = self.regs;
-
+        printk!("[FUZZ] sched::user::start_user_task\n");
         sched::user::start_user_task(
             crate::sched::user::SavedRegs {
                 rax,

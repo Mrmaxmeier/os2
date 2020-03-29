@@ -26,9 +26,8 @@ mod snapshot;
 mod time;
 
 use bootloader::BootInfo;
-use memory::map_region;
 
-pub const PAGING_DEBUG: bool = true;
+pub const PAGING_DEBUG: bool = false;
 
 /// The kernel heap
 #[global_allocator]
