@@ -2,123 +2,17 @@
 
 use x86_64::{
     registers::{
-        model_specific::{Efer, EferFlags, Msr},
+        model_specific::{Efer, EferFlags, Star, LStar, SFMask},
         rflags::{self, RFlags},
     },
-    structures::paging::PageTableFlags,
+    VirtAddr,
 };
 
 use crate::{
     interrupts::SELECTORS,
-    memory::{map_region, VirtualMemoryRegion},
+    userspace::SavedRegs,
 };
 
-const USER_STACK_SIZE: usize = 1; // pages
-
-// Some MSRs used for system call handling.
-
-/// Contains the stack and code segmets for syscall/sysret.
-const STAR: Msr = Msr::new(0xC000_0081);
-
-/// Contains the kernel rip for syscall handler.
-const LSTAR: Msr = Msr::new(0xC000_0082);
-
-/// Contains the kernel rflags mask for syscall.
-const FMASK: Msr = Msr::new(0xC000_0084);
-
-#[derive(Debug, Default)]
-#[repr(C)]
-pub struct SavedRegs {
-    pub rax: u64,
-    pub rbx: u64,
-    pub rcx: u64,
-    pub rdx: u64,
-    pub rdi: u64,
-    pub rsi: u64,
-    pub rbp: u64,
-    pub r8: u64,
-    pub r9: u64,
-    pub r10: u64,
-    pub r11: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-
-    pub rflags: u64,
-    pub rip: u64,
-
-    pub rsp: u64,
-}
-
-/// Allocates virtual address space, adds appropriate page table mappings, loads the specified code
-/// section into the allocated memory.
-///
-/// Returns the virtual address region where the code has been loaded and the first RIP to start
-/// executing.
-pub fn load_user_code_section() -> (VirtualMemoryRegion, usize) {
-    // TODO: Allocate enough space for the code we will load
-    let user_code_section = VirtualMemoryRegion::alloc_with_guard(1);
-
-    // Map the code section.
-    map_region(
-        user_code_section.clone(),
-        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
-    );
-
-    // TODO: load the code
-
-    // TODO: this is test code that is an infinite loop followed by nops
-    let start_addr = {
-        const TEST_CODE: &[u8] = &[
-            // here:
-            0x54, // push %rsp
-            0x58, // pop %rax
-            0x0f, 0x05, // syscall
-            0xeb, 0xfa, // jmp here
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-            0x90, // nop
-        ];
-
-        unsafe {
-            let start = user_code_section.start();
-            for (i, b) in TEST_CODE.iter().enumerate() {
-                start.offset(i as isize).write(*b);
-            }
-            start as usize
-        }
-    };
-
-    (user_code_section, start_addr)
-}
-
-/// Allocates virtual address space for the user stack (fixed size). Adds appropriate page table
-/// mappings (read/write, not execute).
-///
-/// Returns the virtual address region of the stack. The first and last pages are left unmapped as
-/// guard pages. The stack should be used from the end (high-addresses) of the region (top of
-/// stack), since it grows downward.
-pub fn allocate_user_stack() -> VirtualMemoryRegion {
-    // Allocate the stack the user will run on.
-    let user_stack = VirtualMemoryRegion::alloc_with_guard(USER_STACK_SIZE);
-
-    // Map the stack into the address space.
-    map_region(
-        user_stack.clone(),
-        PageTableFlags::PRESENT
-            | PageTableFlags::WRITABLE
-            | PageTableFlags::USER_ACCESSIBLE
-            | PageTableFlags::NO_EXECUTE,
-    );
-
-    user_stack
-}
 
 /// Set some MSRs, registers to enable syscalls and user/kernel context switching.
 pub fn init() {
@@ -136,16 +30,23 @@ pub fn init() {
         let selectors = SELECTORS.lock();
         let kernel_base: u16 = selectors.kernel_cs.index() * 8;
         let user_base: u16 = (selectors.user_ss.index() - 1) * 8;
-        let star: u64 = ((kernel_base as u64) << 32) | ((user_base as u64) << 48);
-        STAR.write(star);
+        Star::write_raw(kernel_base, user_base);
+        /*
+        Star::write(
+            selectors.kernel_cs, 
+            selectors.kernel_ss, 
+            selectors.user_cs, 
+            selectors.user_ss
+        ).unwrap();
+        */
 
         // LSTAR: Syscall Entry RIP
-        LSTAR.write(syscall::entry as u64);
+        LStar::write(VirtAddr::new(syscall::entry as u64));
 
         // FMASK: rflags mask: any set bits are cleared on syscall
         //
         // Want to disable interrupt until we switch to the kernel stack.
-        FMASK.write(RFlags::INTERRUPT_FLAG.bits());
+        SFMask::write(RFlags::INTERRUPT_FLAG);
     }
 }
 

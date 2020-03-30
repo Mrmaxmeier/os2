@@ -21,8 +21,9 @@ mod bare_bones;
 mod interrupts;
 mod memory;
 mod net;
-mod sched;
+mod userspace;
 mod snapshot;
+mod processortrace;
 mod time;
 
 use bootloader::BootInfo;
@@ -64,9 +65,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Set up interrupt/exception handling
     printk!("[    ] Interrupts ...\r");
     interrupts::init();
-    sched::user::init();
     printk!("[DONE] Interrupts    \n");
-
+    userspace::user::init();
+    processortrace::test();
 
     // We can turn on interrupts now.
     x86_64::instructions::interrupts::enable();

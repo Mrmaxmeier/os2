@@ -1,7 +1,7 @@
 use shared::{AdminToNode, NodeToAdmin};
 use crate::net::Network;
 use crate::memory::VirtualMemoryRegion;
-use crate::sched;
+use crate::userspace;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use x86_64::structures::paging::{Size4KiB, PageSize, PageTableFlags};
@@ -43,9 +43,9 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
     }
 
     pub fn recv_snapshot(&mut self) {
-        self.send(NodeToAdmin::Ready);
         let mut pages = 0;
         loop {
+            self.send(NodeToAdmin::Ready);
             printk!("[{:04}] Collecting pages\r", pages);
             match self.recv() {
                 AdminToNode::PushPage { page_id, page} => {
@@ -77,7 +77,7 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
     pub fn setup_pages(&mut self) {
         let mappings = self.mappings.clone();
         for mapping in &mappings {
-            let region = self.user_range(mapping.page_start, mapping.page_end);
+            let _ = self.user_range(mapping.page_start, mapping.page_end);
             let mut flags = PageTableFlags::PRESENT;
             flags.set(PageTableFlags::USER_ACCESSIBLE, true || mapping.perm_r);
             flags.set(PageTableFlags::WRITABLE, mapping.perm_w);
@@ -114,8 +114,8 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
             rsp,
         } = self.regs;
         printk!("[FUZZ] sched::user::start_user_task\n");
-        sched::user::start_user_task(
-            crate::sched::user::SavedRegs {
+        let exit = userspace::start_user_task(
+            userspace::SavedRegs {
                 rax,
                 rbx,
                 rcx,
@@ -136,5 +136,7 @@ impl<'a, 'b, 'c> Session<'a, 'b, 'c> {
                 rsp,
             }
         );
+        printk!("exit: {:?}\n", exit);
+        todo!();
     }
 }

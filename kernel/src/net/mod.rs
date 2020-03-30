@@ -5,6 +5,7 @@ use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr};
 use smoltcp::socket::{TcpSocket, TcpSocketBuffer, SocketSet, SocketHandle};
 use smoltcp::time::Instant;
 use smoltcp::iface::EthernetInterface;
+use x86_64::instructions::interrupts::enable_interrupts_and_hlt;
 
 mod dma;
 mod e1000;
@@ -33,7 +34,7 @@ impl<'a, 'b, 'c> Network<'a, 'b, 'c> {
             if socket.may_send() {
                 return Ok(());
             }
-            unsafe { asm!("hlt") };
+            enable_interrupts_and_hlt();
         }
     }
 
@@ -51,7 +52,9 @@ impl<'a, 'b, 'c> Network<'a, 'b, 'c> {
         while !buf.is_empty() {
             let amount = self.recv_nonblocking(buf)?;
             buf = &mut buf[amount..];
-            unsafe { asm!("hlt") };
+            if !buf.is_empty() {
+                enable_interrupts_and_hlt();
+            }
         }
         Ok(())
     }
